@@ -16,6 +16,12 @@ env:
   TARGET_BRANCH: ${{ github.ref_name }} # target branch on fork to be kept in sync, and target branch on upstream to be kept alive (replace with specific branch name if needed)
   ALIVE_BRANCH: alive
 
+    steps:
+    - name: Print TARGET_BRANCH
+      run: |
+          echo "UPSTREAM_BRANCH is set to: $UPSTREAM_BRANCH"
+          echo "TARGET_BRANCH is set to: $TARGET_BRANCH"
+
 jobs:
   validate:
     name: Validate
