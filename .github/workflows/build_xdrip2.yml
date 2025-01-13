@@ -1,4 +1,4 @@
-name: 4. Build xDrip4iOS
+name: 5. Build xDrip2
 run-name: Build xDrip4iOS (${{ github.ref_name }})
 on:
   workflow_dispatch:
