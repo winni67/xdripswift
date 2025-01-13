@@ -34,11 +34,6 @@ jobs:
       WORKFLOW_PERMISSION: ${{ steps.workflow-permission.outputs.has_permission }}
     
     steps:
-    - name: Print TARGET_BRANCH
-      run: |
-          echo "UPSTREAM_BRANCH is set to: $UPSTREAM_BRANCH"
-          echo "TARGET_BRANCH is set to: $TARGET_BRANCH"
-
     - name: Check for workflow permissions
       id: workflow-permission
       env: 
