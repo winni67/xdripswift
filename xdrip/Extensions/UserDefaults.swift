@@ -229,8 +229,12 @@ extension UserDefaults {
         case dexcomShareAccountName = "dexcomShareAccountName"
         /// dexcom share password
         case dexcomSharePassword = "dexcomSharePassword"
-        /// use US dexcomshare url true or false
+        /// use US dexcomshare url true or false - used for Dexcom Share upload only
         case useUSDexcomShareurl = "useUSDexcomShareurl"
+        /// the region (URL) that will be used for Dexcom Share Follower Mode
+        case dexcomShareRegion = "dexcomShareRegion"
+        /// the timestamp of the last failed login attempt
+        case dexcomShareLoginFailedTimestamp = "dexcomShareLoginFailedTimestamp"
         /// dexcom share serial number
         case dexcomShareUploadSerialNumber = "dexcomShareUploadSerialNumber"
         /// should schedule be used for dexcom share upload ?
@@ -464,6 +468,9 @@ extension UserDefaults {
         
         /// force StandBy mode to show a big number version of the widget
         case forceStandByBigNumbers = "forceStandByBigNumbers"
+        
+        /// should the landscape chart view show statistics info or just a large chart
+        case showStatisticsOnLandscapeChart = "showStatisticsOnLandscapeChart"
     }
     
     
@@ -1624,6 +1631,29 @@ extension UserDefaults {
         }
     }
 
+    /// holds the enum integer of the dexcom share region as detected during the login workflow
+    /// set to none by default
+    var dexcomShareRegion: DexcomShareRegion {
+        get {
+            let dexcomShareRegionAsInt = integer(forKey: Key.dexcomShareRegion.rawValue)
+            return DexcomShareRegion(rawValue: dexcomShareRegionAsInt) ?? .none
+        }
+        set {
+            set(newValue.rawValue, forKey: Key.dexcomShareRegion.rawValue)
+            
+        }
+    }
+
+    /// timestamp of the last failed login attempt to Dexcom Share
+    var dexcomShareLoginFailedTimestamp: Date? {
+        get {
+            return object(forKey: Key.dexcomShareLoginFailedTimestamp.rawValue) as? Date
+        }
+        set {
+            set(newValue, forKey: Key.dexcomShareLoginFailedTimestamp.rawValue)
+        }
+    }
+
     /// dexcom share serial number
     @objc dynamic var dexcomShareUploadSerialNumber:String? {
         get {
@@ -2290,6 +2320,17 @@ extension UserDefaults {
         }
         set {
             set(newValue, forKey: Key.forceStandByBigNumbers.rawValue)
+        }
+    }
+    
+    /// should the landscape chart view show statistics info or just a large chart
+    var showStatisticsOnLandscapeChart: Bool {
+        // default value for bool in userdefaults is false, as default we want the landscape chart view to show the statistics
+        get {
+            return !bool(forKey: Key.showStatisticsOnLandscapeChart.rawValue)
+        }
+        set {
+            set(!newValue, forKey: Key.showStatisticsOnLandscapeChart.rawValue)
         }
     }
     

@@ -692,6 +692,14 @@ final class RootViewController: UIViewController, ObservableObject {
     override func viewDidLoad() {
         super.viewDidLoad()
         
+        // Run a quick check to see if the currently stored followerDataSourceType is now on the ignore list
+        // if so, then reset back to Nightscout. This is unlikely to ever happen, but it *is* possible.
+        let storedType = UserDefaults.standard.followerDataSourceType
+        if !FollowerDataSourceType.allEnabledCases.contains(storedType) {
+            UserDefaults.standard.followerDataSourceType = .nightscout
+            trace("Reset followerDataSourceType from newly ignored %{public}@ to %{public}@", log: self.log, category: ConstantsLog.categoryRootView, type: .info, storedType.description, UserDefaults.standard.followerDataSourceType.description)
+        }
+        
         // from 5.2.0 the showTarget userdefault will be deprecated
         // showTarget will not be checked by the app any more, it will use targetMarkValue
         // targetMarkValue == 0 for disabled (hide) or targetMarkValue > 0 for enabled (show)
@@ -1021,7 +1029,7 @@ final class RootViewController: UIViewController, ObservableObject {
         ApplicationManager.shared.addClosureToRunWhenAppWillTerminate(key: applicationManagerKeyTraceAppWillTerminate, closure: {
             
             // force the live activity to end if it exists to prevent it becoming "orphaned" and unclosable by the app
-            LiveActivityManager.shared.endAllActivities()
+            Task { await LiveActivityManager.shared.endAllActivities() }
             
             trace("Application will terminate - it has probably been force-closed by the user", log: self.log, category: ConstantsLog.categoryRootView, type: .info)
             
@@ -3216,7 +3224,6 @@ final class RootViewController: UIViewController, ObservableObject {
                 if let sensorReadyDateTime = sensorStartDate?.addingTimeInterval(ConstantsLibreLinkUp.sensorWarmUpRequiredInMinutesForLibre * 60) {
                     dataSourceSensorMaxAgeOutlet.text = Texts_BluetoothPeripheralView.warmingUpUntil + " " + sensorReadyDateTime.toStringInUserLocale(timeStyle: .short, dateStyle: .none)
                 }
-                
             } else if isMaster && sensorType == .Libre && sensorAgeInMinutes < ConstantsMaster.minimumSensorWarmUpRequiredInMinutes {
                 // the connected Libre sensor is still in warm-up (as per defined minimum warm-up time)
                 if let sensorReadyDateTime = sensorStartDate?.addingTimeInterval(ConstantsMaster.minimumSensorWarmUpRequiredInMinutes * 60) {
@@ -3341,9 +3348,11 @@ final class RootViewController: UIViewController, ObservableObject {
                 if UserDefaults.standard.dexcomShareAccountName == nil || UserDefaults.standard.dexcomSharePassword == nil {
                     dataSourceSensorMaxAgeOutlet.textColor = .systemRed
                     dataSourceSensorMaxAgeOutlet.text = Texts_HomeView.followerAccountCredentialsMissing
+                } else if UserDefaults.standard.dexcomShareRegion == .none {
+                    dataSourceSensorMaxAgeOutlet.textColor = .systemRed
+                    dataSourceSensorMaxAgeOutlet.text = Texts_HomeView.followerAccountCredentialsInvalid
                 } else if let followerPatientName = UserDefaults.standard.followerPatientName {
                     dataSourceSensorMaxAgeOutlet.text = followerPatientName
-                    
                 }
             }
         }
@@ -3663,9 +3672,9 @@ final class RootViewController: UIViewController, ObservableObject {
                     // create the contentState that will update the dynamic attributes of the Live Activity Widget
                     let contentState = XDripWidgetAttributes.ContentState( bgReadingValues: bgReadingValues, bgReadingDates: bgReadingDates, isMgDl: UserDefaults.standard.bloodGlucoseUnitIsMgDl, slopeOrdinal: slopeOrdinal, deltaValueInUserUnit: deltaValueInUserUnit, urgentLowLimitInMgDl: UserDefaults.standard.urgentLowMarkValue, lowLimitInMgDl: UserDefaults.standard.lowMarkValue, highLimitInMgDl: UserDefaults.standard.highMarkValue, urgentHighLimitInMgDl: UserDefaults.standard.urgentHighMarkValue, liveActivityType: UserDefaults.standard.liveActivityType, dataSourceDescription: dataSourceDescription, followerPatientName: !UserDefaults.standard.isMaster ? UserDefaults.standard.followerPatientName : nil, deviceStatusCreatedAt: deviceStatusCreatedAt, deviceStatusLastLoopDate: deviceStatusLastLoopDate)
                     
-                    LiveActivityManager.shared.runActivity(contentState: contentState, forceRestart: forceRestart)
+                    Task { LiveActivityManager.shared.update(contentState: contentState, forceRestart: forceRestart) }
                 } else {
-                    LiveActivityManager.shared.endAllActivities()
+                    Task { await LiveActivityManager.shared.endAllActivities() }
                 }
                 
                 // update the widget data stored in user defaults
@@ -3681,7 +3690,7 @@ final class RootViewController: UIViewController, ObservableObject {
                     UserDefaults.storeInSharedUserDefaults(value: widgetData, forKey: "widgetSharedUserDefaults.\(Bundle.main.mainAppBundleIdentifier)")
                 }
             } else {
-                LiveActivityManager.shared.endAllActivities()
+                Task { await LiveActivityManager.shared.endAllActivities() }
             }
             WidgetCenter.shared.reloadAllTimelines()
         }
