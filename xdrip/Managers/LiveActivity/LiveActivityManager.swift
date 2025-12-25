@@ -10,6 +10,7 @@ import ActivityKit
 import Foundation
 import OSLog
 import SwiftUI
+import UIKit
 
 /// manager class to handle the live activity events
 public final class LiveActivityManager {
@@ -28,6 +29,11 @@ public final class LiveActivityManager {
     
     // the start date of the event so when know track when to proactively end/restart the activity
     private var eventStartDate: Date
+    private var lastStartAttemptDate: Date
+
+    // minimum age an activity must reach before respecting forceRestart requests
+    // this is done to prevent unnecessary restarts being performed one after the other
+    private let minimumForceRestartAge: TimeInterval = 10
     
     // static shared singleton of LiveActivityManager
     static let shared = LiveActivityManager()
@@ -39,6 +45,7 @@ public final class LiveActivityManager {
     private init() {
         eventAttributes = XDripWidgetAttributes()
         eventStartDate = Date()
+        lastStartAttemptDate = .distantPast
     }
 }
 
@@ -67,11 +74,19 @@ extension LiveActivityManager {
     /// Public API: Restart from intent/shortcut
     @MainActor
     func restartFromIntent() {
-        Task { [weak self] in
-            guard let self = self else { return }
-            await self.endAll()
-            await self.ensureActivity(contentState: self.persistentContentState)
-        }
+        if (UserDefaults.standard.isMaster || (!UserDefaults.standard.isMaster && UserDefaults.standard.followerBackgroundKeepAliveType == .heartbeat)) && UserDefaults.standard.liveActivityType != .disabled {
+            if persistentContentState.urgentLowLimitInMgDl > 0 {
+                trace("in restartFromIntent, will try and end/restart current Live Activity", log: log, category: ConstantsLog.categoryLiveActivityManager, type: .info)
+                Task { [weak self] in
+                    guard let self = self else { return }
+                    await self.endAll()
+                    await self.ensureActivity(contentState: self.persistentContentState, forceRestart: true)
+                }
+            } else {
+                trace("in restartFromIntent, cannot restart live activity from Intent because there is no persistentContentState available", log: log, category: ConstantsLog.categoryLiveActivityManager, type: .info)
+            }
+        } else {
+            trace("in restartFromIntent, will NOT try and restart Live Activity as not in master or not follower+heartbeat or LAs are not enabled", log: log, category: ConstantsLog.categoryLiveActivityManager, type: .info)}
     }
 
     /// Recover orphaned activities if needed. This likely won't usually be needed often but if we can do it, then we will avoid
@@ -103,6 +118,9 @@ extension LiveActivityManager {
         
         // If no activity, start one and return
         if eventActivity == nil {
+            if !forceRestart && shouldDeferNewStart(contentState: contentState, context: "initial start") {
+                return
+            }
             let residualCount = Activity<XDripWidgetAttributes>.activities.count
             if residualCount > 0 {
                 trace("in ensureActivity, found %{public}@ residual live activities, ending them before starting a new one", log: log, category: ConstantsLog.categoryLiveActivityManager, type: .info, residualCount.description)
@@ -115,14 +133,24 @@ extension LiveActivityManager {
         
         // If forceRestart is requested, always end and start a new activity, then return
         if forceRestart {
-            await endAll()
-            await startActivity(contentState: contentState)
-            trace("in ensureActivity, forceRestart triggered", log: log, category: ConstantsLog.categoryLiveActivityManager, type: .info)
-            return
+            let activityAge = Date().timeIntervalSince(eventStartDate)
+            if activityAge >= minimumForceRestartAge {
+                await endAll()
+                await startActivity(contentState: contentState)
+                let activityAgeString = activityAge < 3600 ? activityAge.minutes.round(toDecimalPlaces: 1).description + " minutes" : activityAge.hours.round(toDecimalPlaces: 1).description + " hours"
+                trace("in ensureActivity, forceRestart triggered (existing Live Activity age: %{public}@)", log: log, category: ConstantsLog.categoryLiveActivityManager, type: .info, activityAgeString)
+                return
+            } else {
+                let activityAgeString = activityAge < 3600 ? activityAge.minutes.round(toDecimalPlaces: 1).description + " minutes" : activityAge.hours.round(toDecimalPlaces: 1).description + " hours"
+                trace("in ensureActivity, forceRestart ignored (existing Live Activity age: %{public}@)", log: log, category: ConstantsLog.categoryLiveActivityManager, type: .info, activityAgeString)
+            }
         }
         
         // If activity is dismissed or ended, end them, start a new one and return
         if eventActivity?.activityState == .dismissed || eventActivity?.activityState == .ended {
+            if !forceRestart && shouldDeferNewStart(contentState: contentState, context: "restart after dismissal/end") {
+                return
+            }
             await endAll()
             await startActivity(contentState: contentState)
             trace("in ensureActivity, restarted live activity after dismissal/end", log: log, category: ConstantsLog.categoryLiveActivityManager, type: .info)
@@ -148,7 +176,9 @@ extension LiveActivityManager {
     /// - Parameter contentState: the content state of the new activity
     @MainActor
     private func startActivity(contentState: XDripWidgetAttributes.ContentState) async {
-        eventStartDate = Date()
+        let now = Date()
+        eventStartDate = now
+        lastStartAttemptDate = now
         
         var updatedContentState = contentState
         updatedContentState.warnUserToOpenApp = false
@@ -168,6 +198,8 @@ extension LiveActivityManager {
             
             trace("in startActivity, new live activity started: %{public}@", log: log, category: ConstantsLog.categoryLiveActivityManager, type: .info, String(describing: eventActivity?.id))
         } catch {
+            eventActivity = nil
+            persistentContentState = updatedContentState
             trace("in startActivity, error: %{public}@", log: log, category: ConstantsLog.categoryLiveActivityManager, type: .error, error.localizedDescription)
         }
     }
@@ -176,10 +208,11 @@ extension LiveActivityManager {
     /// - Parameter contentState: the updated context state of the activity
     @MainActor
     private func updateActivity(to contentState: XDripWidgetAttributes.ContentState) async {
-        // ...existing code...
-        
         if eventActivity?.activityState == .ended {
             trace("in updateActivity, detected .ended state. Starting a new live activity", log: self.log, category: ConstantsLog.categoryLiveActivityManager, type: .info)
+            if shouldDeferNewStart(contentState: contentState, context: "restart after .ended state") {
+                return
+            }
             await endAllActivities()
             await startActivity(contentState: contentState)
             return
@@ -188,6 +221,9 @@ extension LiveActivityManager {
         // check if the activity is dismissed by the user (by swiping away the notification)
         // if so, then end it completely and start a new one
         if eventActivity?.activityState == .dismissed {
+            if shouldDeferNewStart(contentState: contentState, context: "restart after dismissal") {
+                return
+            }
             await endAllActivities()
             await startActivity(contentState: contentState)
             trace("in updateActivity, previous live activity was dismissed by the user so it will be ended and will try to start a new one.", log: self.log, category: ConstantsLog.categoryLiveActivityManager, type: .info)
@@ -215,5 +251,24 @@ extension LiveActivityManager {
             }
             eventActivity = nil
         }
+    }
+
+    @MainActor
+    private func shouldDeferNewStart(contentState: XDripWidgetAttributes.ContentState, context: String) -> Bool {
+        let restartThrottleInterval: TimeInterval = 2
+        let now = Date()
+        let secondsSinceLastStartAttempt = now.timeIntervalSince(lastStartAttemptDate)
+        if secondsSinceLastStartAttempt < restartThrottleInterval {
+            persistentContentState = contentState
+            trace("in LiveActivityManager, throttling %{public}@ (last start %{public}@ seconds ago)", log: log, category: ConstantsLog.categoryLiveActivityManager, type: .info, context, secondsSinceLastStartAttempt.description)
+            return true
+        }
+        if UIApplication.shared.applicationState != .active {
+            persistentContentState = contentState
+            trace("in LiveActivityManager, deferring %{public}@ until application becomes active", log: log, category: ConstantsLog.categoryLiveActivityManager, type: .info, context)
+            return true
+        }
+        lastStartAttemptDate = now
+        return false
     }
 }
