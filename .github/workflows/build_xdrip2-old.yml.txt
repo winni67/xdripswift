@@ -1,4 +1,4 @@
-name: 5. Build xDrip2
+name: 15. Build xDrip2 old
 # run-name: Build xDrip4iOS (${{ github.ref_name }})
 run-name: Build xDrip2 (xdripswift2)
 on:
